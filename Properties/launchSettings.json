@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Harvest.CLI": {
+      "commandName": "Project",
+      "commandLineArgs": "projects"
+    }
+  }
+}
