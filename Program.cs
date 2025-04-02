@@ -88,10 +88,34 @@ namespace Harvest.CLI
                 // Submit time entry with timestamps
                 TrackTimeWithTimestampsAsync(projectId, taskId, date, startTime, endTime, notes);
                 Console.WriteLine($"\nSuccess! Time entry recorded for {date:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
+
+                // Ask if the user wants to fill up the hours until Friday
+                Console.WriteLine("\nDo you want to fill up the hours with the same values until Friday of the current week? (y/n): ");
+                string? fillResponse = Console.ReadLine()?.Trim().ToLower();
+                if (fillResponse == "y" || fillResponse == "yes")
+                {
+                    FillUpHoursUntilFriday(date, projectId, taskId, startTime, endTime, notes);
+                }
             }
             else
             {
                 Console.WriteLine("Time tracking cancelled.");
+            }
+        }
+
+        private static void FillUpHoursUntilFriday(DateTime startDate, int projectId, int taskId, TimeOnly startTime, TimeOnly endTime, string notes)
+        {
+            DateTime current = startDate;
+            while (current.DayOfWeek != DayOfWeek.Friday)
+            {
+                current = current.AddDays(1);
+                if (current.DayOfWeek == DayOfWeek.Saturday || current.DayOfWeek == DayOfWeek.Sunday)
+                {
+                    continue;
+                }
+
+                TrackTimeWithTimestampsAsync(projectId, taskId, current, startTime, endTime, notes);
+                Console.WriteLine($"\nSuccess! Time entry recorded for {current:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
             }
         }
 
@@ -257,7 +281,7 @@ namespace Harvest.CLI
             return projectAssignments.OrderBy(p => p.Project.Name).ToList();
         }
 
-        private static  (int projectId, int taskId, string projectName, string taskName) SelectProjectAndTaskAsync()
+        private static (int projectId, int taskId, string projectName, string taskName) SelectProjectAndTaskAsync()
         {
             var projectAssignments = GetProjectAssignmentsAsync();
 
