@@ -28,9 +28,13 @@ public sealed class Application(
             new SelectionPrompt<string>()
                 .Title("[bold]How would you like to proceed?[/]")
                 .HighlightStyle(new Style(Color.Orange1, decoration: Decoration.Bold))
-                .AddChoices("Import from CSV file (Ruddr export)", "Manual entry"));
+                .AddChoices("Browse projects & tasks", "Import from CSV file (Ruddr export)", "Manual entry"));
 
-        if (mode.StartsWith("Import", StringComparison.Ordinal))
+        if (mode.StartsWith("Browse", StringComparison.Ordinal))
+        {
+            await DisplayProjectsAndTasksAsync(ct);
+        }
+        else if (mode.StartsWith("Import", StringComparison.Ordinal))
         {
             try
             {
@@ -49,6 +53,64 @@ public sealed class Application(
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule("[grey]Session complete[/]").RuleStyle("grey"));
         AnsiConsole.MarkupLine("[dim]Thank you for using [bold orange1]Harvest CLI[/]. Goodbye![/]");
+    }
+
+    /// <summary>
+    /// Fetches and displays all assigned projects and their tasks with IDs.
+    /// </summary>
+    private async Task DisplayProjectsAndTasksAsync(CancellationToken ct)
+    {
+        List<ProjectAssignment> assignments = [];
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots2)
+            .SpinnerStyle(Style.Parse("orange1"))
+            .StartAsync("Loading project assignments...", async _ =>
+            {
+                assignments = await apiClient.GetProjectAssignmentsAsync(ct);
+            });
+
+        if (assignments.Count == 0)
+        {
+            ConsoleHelper.DisplayWarning("No active project assignments found.");
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[bold]Found [orange1]{assignments.Count}[/] project(s).[/]");
+        AnsiConsole.WriteLine();
+
+        foreach (var assignment in assignments)
+        {
+            string clientInfo = assignment.Client is not null
+                ? $" [dim]({assignment.Client.Name.EscapeMarkup()})[/]"
+                : string.Empty;
+
+            AnsiConsole.MarkupLine(
+                $"[bold orange1]:file_folder: {assignment.Project.Name.EscapeMarkup()}[/]{clientInfo}  [dim]ID: {assignment.Project.Id}[/]");
+
+            if (assignment.TaskAssignments.Count == 0)
+            {
+                AnsiConsole.MarkupLine("   [dim]No tasks assigned.[/]");
+            }
+            else
+            {
+                var table = new Table()
+                    .Border(TableBorder.Simple)
+                    .BorderColor(Color.Grey)
+                    .AddColumn(new TableColumn("[bold]Task ID[/]").RightAligned())
+                    .AddColumn(new TableColumn("[bold]Task Name[/]"));
+
+                foreach (var task in assignment.TaskAssignments.OrderBy(t => t.Task.Name))
+                {
+                    table.AddRow(
+                        $"[dim]{task.Task.Id}[/]",
+                        task.Task.Name.EscapeMarkup());
+                }
+
+                AnsiConsole.Write(table);
+            }
+
+            AnsiConsole.WriteLine();
+        }
     }
 
     private async Task ProcessManualEntryLoopAsync(CancellationToken ct)
