@@ -3,6 +3,7 @@ using Harvest.CLI.Configuration;
 using Harvest.CLI.Helpers;
 using Harvest.CLI.Models;
 using Harvest.CLI.Services;
+using Spectre.Console;
 
 namespace Harvest.CLI;
 
@@ -19,16 +20,17 @@ public sealed class Application(
     /// </summary>
     public async Task RunAsync(CancellationToken ct = default)
     {
-        Console.WriteLine("Welcome to Harvest CLI!");
-        Console.WriteLine("============================");
+        AnsiConsole.Write(new FigletText("Harvest CLI").Color(Color.Orange1));
+        AnsiConsole.Write(new Rule("[grey]Time Tracking Made Easy[/]").RuleStyle("orange1"));
+        AnsiConsole.WriteLine();
 
-        Console.WriteLine("\nHow would you like to proceed?");
-        Console.WriteLine("1. Import from CSV file (Ruddr export)");
-        Console.WriteLine("2. Manual entry");
-        Console.Write("\nSelect an option (1 or 2): ");
-        string? modeChoice = Console.ReadLine()?.Trim();
+        var mode = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[bold]How would you like to proceed?[/]")
+                .HighlightStyle(new Style(Color.Orange1, decoration: Decoration.Bold))
+                .AddChoices("Import from CSV file (Ruddr export)", "Manual entry"));
 
-        if (modeChoice == "1")
+        if (mode.StartsWith("Import", StringComparison.Ordinal))
         {
             try
             {
@@ -44,7 +46,9 @@ public sealed class Application(
             await ProcessManualEntryLoopAsync(ct);
         }
 
-        Console.WriteLine("\nThank you for using Harvest CLI. Goodbye!");
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Rule("[grey]Session complete[/]").RuleStyle("grey"));
+        AnsiConsole.MarkupLine("[dim]Thank you for using [bold orange1]Harvest CLI[/]. Goodbye![/]");
     }
 
     private async Task ProcessManualEntryLoopAsync(CancellationToken ct)
@@ -56,19 +60,19 @@ public sealed class Application(
             {
                 await ProcessSingleTimeEntryAsync(ct);
 
-                continueTracking = ConsoleHelper.Confirm("\nDo you want to add another time entry? (y/n): ");
+                continueTracking = ConsoleHelper.Confirm("Add another time entry?");
 
                 if (continueTracking)
                 {
-                    Console.WriteLine("\n----------------------------------------------------");
-                    Console.WriteLine("Starting a new time entry...");
-                    Console.WriteLine("----------------------------------------------------\n");
+                    AnsiConsole.WriteLine();
+                    AnsiConsole.Write(new Rule("[orange1]New Time Entry[/]").RuleStyle("grey"));
+                    AnsiConsole.WriteLine();
                 }
             }
             catch (Exception ex)
             {
                 ConsoleHelper.DisplayError($"Error: {ex.Message}");
-                continueTracking = ConsoleHelper.Confirm("\nDo you want to try again? (y/n): ");
+                continueTracking = ConsoleHelper.Confirm("Try again?");
             }
         }
     }
@@ -81,7 +85,7 @@ public sealed class Application(
 
         if (projectId == 0 || taskId == 0)
         {
-            Console.WriteLine("Time tracking cancelled.");
+            AnsiConsole.MarkupLine("[dim]Time tracking cancelled.[/]");
             return;
         }
 
@@ -92,17 +96,22 @@ public sealed class Application(
 
         if (ConfirmTimeEntry(date, startTime, endTime, hours, projectName, taskName, fullNotes))
         {
-            await SubmitTimeEntryAsync(projectId, taskId, date, startTime, endTime, notes, ct);
-            Console.WriteLine($"\nSuccess! Time entry recorded for {date:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots2)
+                .SpinnerStyle(Style.Parse("orange1"))
+                .StartAsync("Submitting time entry...", async _ =>
+                    await SubmitTimeEntryAsync(projectId, taskId, date, startTime, endTime, notes, ct));
 
-            if (ConsoleHelper.Confirm("\nDo you want to fill up the hours with the same values until Friday of the current week? (y/n): "))
+            ConsoleHelper.DisplaySuccess($"Time entry recorded for {date:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
+
+            if (ConsoleHelper.Confirm("Fill up hours with the same values until Friday of the current week?"))
             {
                 await FillUpHoursUntilFridayAsync(date, projectId, taskId, startTime, endTime, notes, ct);
             }
         }
         else
         {
-            Console.WriteLine("Time tracking cancelled.");
+            AnsiConsole.MarkupLine("[dim]Time tracking cancelled.[/]");
         }
     }
 
@@ -118,8 +127,13 @@ public sealed class Application(
             if (current.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
                 continue;
 
-            await SubmitTimeEntryAsync(projectId, taskId, current, startTime, endTime, notes, ct);
-            Console.WriteLine($"\nSuccess! Time entry recorded for {current:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots2)
+                .SpinnerStyle(Style.Parse("orange1"))
+                .StartAsync($"Submitting {current:yyyy-MM-dd}...", async _ =>
+                    await SubmitTimeEntryAsync(projectId, taskId, current, startTime, endTime, notes, ct));
+
+            ConsoleHelper.DisplaySuccess($"Time entry recorded for {current:yyyy-MM-dd} from {startTime:HH\\:mm} to {endTime:HH\\:mm}.");
         }
     }
 
@@ -134,17 +148,19 @@ public sealed class Application(
             return;
         }
 
-        Console.WriteLine("\nEnter the path to the CSV file:");
-        string? csvPath = Console.ReadLine()?.Trim().Trim('"');
-
-        if (string.IsNullOrEmpty(csvPath) || !File.Exists(csvPath))
-        {
-            ConsoleHelper.DisplayError("File not found. Import cancelled.");
-            return;
-        }
+        var csvPath = AnsiConsole.Prompt(
+            new TextPrompt<string>("Enter the [orange1]path to the CSV file[/]:")
+                .ValidationErrorMessage("[red]File not found[/]")
+                .Validate(path =>
+                {
+                    var trimmed = path.Trim().Trim('"');
+                    return !string.IsNullOrEmpty(trimmed) && File.Exists(trimmed)
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error("[red]File not found. Please enter a valid path.[/]");
+                })).Trim().Trim('"');
 
         var entries = csvService.ParseFile(csvPath);
-        Console.WriteLine($"\nParsed {entries.Count} time entries from CSV.");
+        AnsiConsole.MarkupLine($"\n[bold]Parsed [orange1]{entries.Count}[/] time entries from CSV.[/]");
 
         var groupedByDate = entries.GroupBy(e => e.Date).OrderBy(g => g.Key);
 
@@ -154,106 +170,128 @@ public sealed class Application(
             var dayEntries = dateGroup.ToList();
             decimal totalHours = dayEntries.Sum(e => e.Hours);
 
-            Console.WriteLine($"\n--- {date:yyyy-MM-dd} | {dayEntries.Count} entries | {totalHours} total hours ---");
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Rule($"[bold]{date:yyyy-MM-dd}[/]  [dim]{dayEntries.Count} entries | {totalHours}h[/]").RuleStyle("orange1").LeftJustified());
 
             if (totalHours > 9)
             {
                 ConsoleHelper.DisplayWarning(
-                    $"  Warning: {totalHours} hours exceeds 9-hour daily limit (8:00-18:00 minus 1h lunch).");
+                    $"{totalHours} hours exceeds 9-hour daily limit (8:00-18:00 minus 1h lunch).");
             }
 
             var scheduledEntries = csvService.ScheduleDayEntries(dayEntries, importSettings);
 
-            foreach (var scheduled in scheduledEntries.OrderBy(e => e.StartTime))
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .BorderColor(Color.Grey)
+                .AddColumn(new TableColumn("[bold]Type[/]").Centered())
+                .AddColumn(new TableColumn("[bold]Time[/]").Centered())
+                .AddColumn(new TableColumn("[bold]Notes[/]"))
+                .AddColumn(new TableColumn("[bold]Status[/]").Centered());
+
+            var orderedEntries = scheduledEntries.OrderBy(e => e.StartTime).ToList();
+
+            // Pre-populate rows
+            foreach (var scheduled in orderedEntries)
             {
                 string label = scheduled.IsLunchBreak
-                    ? "[Lunch]"
-                    : (scheduled.IsBillable ? "[Billable]" : "[Non-Billable]");
+                    ? "[dim]:fork_and_knife: Lunch[/]"
+                    : scheduled.IsBillable
+                        ? "[green]:dollar_banknote: Billable[/]"
+                        : "[blue]:blue_circle: Non-Billable[/]";
 
-                Console.WriteLine($"  {label} {scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm} | {scheduled.Notes}");
+                table.AddRow(
+                    label,
+                    $"{scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm}",
+                    scheduled.Notes.EscapeMarkup(),
+                    "[dim]Pending...[/]");
+            }
 
-                await SubmitTimeEntryAsync(
-                    scheduled.ProjectId, scheduled.TaskId, date,
-                    scheduled.StartTime, scheduled.EndTime, scheduled.Notes, ct);
+            AnsiConsole.Write(table);
 
-                Console.WriteLine("    -> Submitted successfully.");
+            // Submit each entry with progress feedback
+            foreach (var scheduled in orderedEntries)
+            {
+                await AnsiConsole.Status()
+                    .Spinner(Spinner.Known.Dots2)
+                    .SpinnerStyle(Style.Parse("orange1"))
+                    .StartAsync($"Submitting {scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm}...", async _ =>
+                    {
+                        await SubmitTimeEntryAsync(
+                            scheduled.ProjectId, scheduled.TaskId, date,
+                            scheduled.StartTime, scheduled.EndTime, scheduled.Notes, ct);
+                    });
+
+                ConsoleHelper.DisplaySuccess($"{scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm} submitted.");
             }
         }
 
-        Console.WriteLine("\nCSV import completed!");
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Panel("[bold green]CSV import completed successfully![/]")
+            .Border(BoxBorder.Rounded)
+            .BorderColor(Color.Green)
+            .Padding(1, 0));
     }
 
     private async Task<(int ProjectId, int TaskId, string ProjectName, string TaskName)> SelectProjectAndTaskAsync(
         CancellationToken ct)
     {
-        var assignments = await apiClient.GetProjectAssignmentsAsync(ct);
+        List<ProjectAssignment> assignments = [];
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots2)
+            .SpinnerStyle(Style.Parse("orange1"))
+            .StartAsync("Loading projects...", async _ =>
+            {
+                assignments = await apiClient.GetProjectAssignmentsAsync(ct);
+            });
 
         if (assignments.Count == 0)
             throw new InvalidOperationException("No active project assignments found for your user.");
 
-        Console.WriteLine("\nAvailable Projects:");
-        Console.WriteLine("------------------");
-        for (int i = 0; i < assignments.Count; i++)
-        {
-            Console.WriteLine($"{i + 1}. {assignments[i].Project.Name} ({assignments[i].Client?.Name})");
-        }
+        var projectChoices = assignments
+            .Select(a => $"{a.Project.Name} ({a.Client?.Name ?? "No client"})")
+            .Prepend("Cancel")
+            .ToList();
 
-        int projectId;
-        string projectName;
+        var projectSelection = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[bold]Select a project:[/]")
+                .PageSize(15)
+                .HighlightStyle(new Style(Color.Orange1, decoration: Decoration.Bold))
+                .AddChoices(projectChoices));
 
-        while (true)
-        {
-            Console.Write("\nEnter project number (or 0 to cancel): ");
-            if (int.TryParse(Console.ReadLine(), out int selection))
-            {
-                if (selection == 0)
-                    return (0, 0, string.Empty, string.Empty);
+        if (projectSelection == "Cancel")
+            return (0, 0, string.Empty, string.Empty);
 
-                if (selection > 0 && selection <= assignments.Count)
-                {
-                    var selected = assignments[selection - 1];
-                    projectId = selected.Project.Id;
-                    projectName = selected.Project.Name;
-                    break;
-                }
-            }
+        int projectIndex = projectChoices.IndexOf(projectSelection) - 1; // -1 for Cancel
+        var selected = assignments[projectIndex];
+        int projectId = selected.Project.Id;
+        string projectName = selected.Project.Name;
 
-            ConsoleHelper.DisplayError("Invalid selection. Please try again.");
-        }
-
-        var tasks = assignments
-            .First(pa => pa.Project.Id == projectId)
-            .TaskAssignments
+        var tasks = selected.TaskAssignments
             .OrderBy(t => t.Task.Name)
             .ToList();
 
         if (tasks.Count == 0)
             throw new InvalidOperationException($"No active tasks found for project '{projectName}'.");
 
-        Console.WriteLine("\nAvailable Tasks:");
-        Console.WriteLine("---------------");
-        for (int i = 0; i < tasks.Count; i++)
-        {
-            Console.WriteLine($"{i + 1}. {tasks[i].Task.Name}");
-        }
+        var taskChoices = tasks
+            .Select(t => t.Task.Name)
+            .Prepend("Cancel")
+            .ToList();
 
-        while (true)
-        {
-            Console.Write("\nEnter task number (or 0 to cancel): ");
-            if (int.TryParse(Console.ReadLine(), out int taskSelection))
-            {
-                if (taskSelection == 0)
-                    return (0, 0, string.Empty, string.Empty);
+        var taskSelection = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title($"[bold]Select a task for [orange1]{projectName.EscapeMarkup()}[/]:[/]")
+                .PageSize(15)
+                .HighlightStyle(new Style(Color.Orange1, decoration: Decoration.Bold))
+                .AddChoices(taskChoices));
 
-                if (taskSelection > 0 && taskSelection <= tasks.Count)
-                {
-                    return (projectId, tasks[taskSelection - 1].Task.Id,
-                        projectName, tasks[taskSelection - 1].Task.Name);
-                }
-            }
+        if (taskSelection == "Cancel")
+            return (0, 0, string.Empty, string.Empty);
 
-            ConsoleHelper.DisplayError("Invalid selection. Please try again.");
-        }
+        int taskIndex = taskChoices.IndexOf(taskSelection) - 1; // -1 for Cancel
+        return (projectId, tasks[taskIndex].Task.Id, projectName, tasks[taskIndex].Task.Name);
     }
 
     private async Task SubmitTimeEntryAsync(
@@ -280,46 +318,29 @@ public sealed class Application(
     {
         DateTime today = DateTime.Today;
 
-        Console.WriteLine($"\nEnter date for time entry (format: yyyy-MM-dd, press Enter for today {today:yyyy-MM-dd}):");
-        string? input = Console.ReadLine();
+        var input = AnsiConsole.Prompt(
+            new TextPrompt<string>($"Date for time entry [dim](yyyy-MM-dd, Enter = {today:yyyy-MM-dd})[/]:")
+                .AllowEmpty()
+                .Validate(value =>
+                {
+                    if (string.IsNullOrWhiteSpace(value))
+                        return ValidationResult.Success();
+
+                    return DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error("[red]Invalid format. Use yyyy-MM-dd.[/]");
+                }));
 
         if (string.IsNullOrWhiteSpace(input))
             return today;
 
-        if (DateTime.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date))
-            return date;
-
-        Console.WriteLine($"Invalid date format. Using today's date ({today:yyyy-MM-dd}).");
-        return today;
+        return DateTime.ParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
     private static (TimeOnly StartTime, TimeOnly EndTime, decimal Hours) PromptForTimeRange()
     {
-        TimeOnly startTime;
-        while (true)
-        {
-            Console.WriteLine("\nEnter start time (format: HH:mm):");
-            string? startInput = Console.ReadLine();
-
-            if (TimeOnly.TryParseExact(startInput, "H:mm", out startTime) ||
-                TimeOnly.TryParseExact(startInput, "HH:mm", out startTime))
-                break;
-
-            ConsoleHelper.DisplayError("Invalid time format. Please use HH:mm format (e.g. 09:00).");
-        }
-
-        TimeOnly endTime;
-        while (true)
-        {
-            Console.WriteLine("\nEnter end time (format: HH:mm):");
-            string? endInput = Console.ReadLine();
-
-            if (TimeOnly.TryParseExact(endInput, "H:mm", out endTime) ||
-                TimeOnly.TryParseExact(endInput, "HH:mm", out endTime))
-                break;
-
-            ConsoleHelper.DisplayError("Invalid time format. Please use HH:mm format (e.g. 17:30).");
-        }
+        var startTime = PromptForTime("Start time [dim](HH:mm)[/]:");
+        var endTime = PromptForTime("End time [dim](HH:mm)[/]:");
 
         decimal hours = CalculateHours(startTime, endTime);
 
@@ -329,8 +350,20 @@ public sealed class Application(
             return PromptForTimeRange();
         }
 
-        Console.WriteLine($"\nTime range: {startTime:HH\\:mm} - {endTime:HH\\:mm} ({hours:0.##} hours)");
+        AnsiConsole.MarkupLine($"[dim]Time range:[/] [bold]{startTime:HH\\:mm}[/] - [bold]{endTime:HH\\:mm}[/] [dim]({hours:0.##} hours)[/]");
         return (startTime, endTime, hours);
+    }
+
+    private static TimeOnly PromptForTime(string prompt)
+    {
+        var value = AnsiConsole.Prompt(
+            new TextPrompt<string>(prompt)
+                .Validate(v =>
+                    TimeOnly.TryParseExact(v, "H:mm", out _) || TimeOnly.TryParseExact(v, "HH:mm", out _)
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error("[red]Invalid format. Use HH:mm (e.g. 09:00).[/]")));
+
+        return TimeOnly.TryParseExact(value, "H:mm", out var t1) ? t1 : TimeOnly.ParseExact(value, "HH:mm");
     }
 
     private static decimal CalculateHours(TimeOnly startTime, TimeOnly endTime)
@@ -344,23 +377,32 @@ public sealed class Application(
 
     private static string PromptForNotes()
     {
-        Console.WriteLine("\nEnter notes (optional, press Enter to skip):");
-        return Console.ReadLine() ?? string.Empty;
+        return AnsiConsole.Prompt(
+            new TextPrompt<string>("Notes [dim](optional, Enter to skip)[/]:")
+                .AllowEmpty());
     }
 
     private static bool ConfirmTimeEntry(
         DateTime date, TimeOnly startTime, TimeOnly endTime, decimal hours,
         string projectName, string taskName, string notes)
     {
-        Console.WriteLine("\n=== Time Entry Summary ===");
-        Console.WriteLine($"Date: {date:yyyy-MM-dd}");
-        Console.WriteLine($"Time: {startTime:HH\\:mm} - {endTime:HH\\:mm} ({hours:0.##} hours)");
-        Console.WriteLine($"Project: {projectName}");
-        Console.WriteLine($"Task: {taskName}");
-        Console.WriteLine($"Notes: {notes}");
-        Console.WriteLine("========================");
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Orange1)
+            .Title("[bold orange1]Time Entry Summary[/]")
+            .AddColumn(new TableColumn("[bold]Field[/]"))
+            .AddColumn(new TableColumn("[bold]Value[/]"));
 
-        return ConsoleHelper.Confirm("\nSubmit this time entry? (y/n): ");
+        table.AddRow("[dim]Date[/]", $"[bold]{date:yyyy-MM-dd}[/]");
+        table.AddRow("[dim]Time[/]", $"[bold]{startTime:HH\\:mm}[/] - [bold]{endTime:HH\\:mm}[/] ({hours:0.##}h)");
+        table.AddRow("[dim]Project[/]", $"[bold orange1]{projectName.EscapeMarkup()}[/]");
+        table.AddRow("[dim]Task[/]", taskName.EscapeMarkup());
+        table.AddRow("[dim]Notes[/]", notes.EscapeMarkup());
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(table);
+
+        return ConsoleHelper.Confirm("Submit this time entry?");
     }
 
     #endregion

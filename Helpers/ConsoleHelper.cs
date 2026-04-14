@@ -1,28 +1,34 @@
+using Spectre.Console;
+
 namespace Harvest.CLI.Helpers;
 
 /// <summary>
-/// Utility methods for formatted console output.
+/// Utility methods for formatted console output using Spectre.Console.
 /// </summary>
 internal static class ConsoleHelper
 {
     /// <summary>
-    /// Displays a message in red.
+    /// Displays an error message in a red panel.
     /// </summary>
     public static void DisplayError(string message)
     {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine(message);
-        Console.ResetColor();
+        AnsiConsole.MarkupLine($"[bold red]:cross_mark: {message.EscapeMarkup()}[/]");
     }
 
     /// <summary>
-    /// Displays a message in yellow.
+    /// Displays a warning message in yellow.
     /// </summary>
     public static void DisplayWarning(string message)
     {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine(message);
-        Console.ResetColor();
+        AnsiConsole.MarkupLine($"[bold yellow]:warning: {message.EscapeMarkup()}[/]");
+    }
+
+    /// <summary>
+    /// Displays a success message in green.
+    /// </summary>
+    public static void DisplaySuccess(string message)
+    {
+        AnsiConsole.MarkupLine($"[bold green]:check_mark_button: {message.EscapeMarkup()}[/]");
     }
 
     /// <summary>
@@ -30,8 +36,6 @@ internal static class ConsoleHelper
     /// </summary>
     public static bool Confirm(string prompt)
     {
-        Console.Write(prompt);
-        string? response = Console.ReadLine()?.Trim().ToLowerInvariant();
-        return response is "y" or "yes";
+        return AnsiConsole.Confirm(prompt);
     }
 }
