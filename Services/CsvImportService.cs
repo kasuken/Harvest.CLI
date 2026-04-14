@@ -42,7 +42,6 @@ public sealed class CsvImportService
         var currentTime = new TimeOnly(8, 0);
         var lunchStart = new TimeOnly(12, 0);
         var lunchEnd = new TimeOnly(13, 0);
-        bool lunchAdded = false;
 
         foreach (var entry in dayEntries)
         {
@@ -51,21 +50,9 @@ public sealed class CsvImportService
 
             while (remainingHours > 0)
             {
+                // Skip the lunch hour — no entry created, just advance past it
                 if (currentTime >= lunchStart && currentTime < lunchEnd)
                 {
-                    if (!lunchAdded)
-                    {
-                        scheduled.Add(new ScheduledEntry
-                        {
-                            StartTime = lunchStart,
-                            EndTime = lunchEnd,
-                            ProjectId = settings.LunchBreakProjectId,
-                            TaskId = settings.LunchBreakTaskId,
-                            Notes = "Lunch break",
-                            IsLunchBreak = true
-                        });
-                        lunchAdded = true;
-                    }
                     currentTime = lunchEnd;
                 }
 
@@ -103,5 +90,67 @@ public sealed class CsvImportService
         return entry.IsBillable
             ? (settings.BillableProjectId, settings.BillableTaskId)
             : (settings.NonBillableProjectId, settings.NonBillableTaskId);
+    }
+
+    /// <summary>
+    /// Pads weekly hours to the target (default 42) by adding 30-minute non-billable blocks per day until the gap is filled.
+    /// </summary>
+    public void PadWeeklyHours(
+        List<(DateTime Date, List<ScheduledEntry> Entries)> allScheduled,
+        ImportSettings settings,
+        decimal targetWeeklyHours = 42m)
+    {
+        ArgumentNullException.ThrowIfNull(allScheduled);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        // Group scheduled days by ISO week
+        var weeks = allScheduled
+            .GroupBy(s => ISOWeek.GetWeekOfYear(s.Date))
+            .ToList();
+
+        foreach (var week in weeks)
+        {
+            decimal weekTotal = week.Sum(d => d.Entries.Sum(e => (decimal)(e.EndTime - e.StartTime).TotalHours));
+            decimal gap = targetWeeklyHours - weekTotal;
+
+            if (gap <= 0) continue;
+
+            var weekDays = week.OrderBy(d => d.Date).ToList();
+            int dayIndex = 0;
+
+            while (gap > 0 && dayIndex < weekDays.Count)
+            {
+                var (date, entries) = weekDays[dayIndex];
+
+                // Find the last end time for this day
+                var lastEnd = entries.Count > 0
+                    ? entries.Max(e => e.EndTime)
+                    : new TimeOnly(8, 0);
+
+                // Skip lunch if we land in it
+                if (lastEnd >= new TimeOnly(12, 0) && lastEnd < new TimeOnly(13, 0))
+                    lastEnd = new TimeOnly(13, 0);
+
+                decimal blockMinutes = Math.Min(30, gap * 60);
+                var blockEnd = lastEnd.AddMinutes((double)blockMinutes);
+
+                entries.Add(new ScheduledEntry
+                {
+                    StartTime = lastEnd,
+                    EndTime = blockEnd,
+                    ProjectId = settings.NonBillableProjectId,
+                    TaskId = settings.NonBillableTaskId,
+                    Notes = string.Empty,
+                    IsBillable = false
+                });
+
+                gap -= blockMinutes / 60m;
+                dayIndex++;
+
+                // Cycle back to the first day if gap still remains
+                if (dayIndex >= weekDays.Count && gap > 0)
+                    dayIndex = 0;
+            }
+        }
     }
 }

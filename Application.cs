@@ -202,8 +202,7 @@ public sealed class Application(
     private async Task ProcessCsvImportAsync(CancellationToken ct)
     {
         if (importSettings.BillableProjectId == 0 || importSettings.BillableTaskId == 0 ||
-            importSettings.NonBillableProjectId == 0 || importSettings.NonBillableTaskId == 0 ||
-            importSettings.LunchBreakProjectId == 0 || importSettings.LunchBreakTaskId == 0)
+            importSettings.NonBillableProjectId == 0 || importSettings.NonBillableTaskId == 0)
         {
             ConsoleHelper.DisplayError(
                 "Import settings are incomplete. Configure all project/task IDs in appsettings.json under Harvest:Import.");
@@ -226,65 +225,82 @@ public sealed class Application(
 
         var groupedByDate = entries.GroupBy(e => e.Date).OrderBy(g => g.Key);
 
+        // Build the full schedule for all dates before submitting anything
+        var allScheduled = new List<(DateTime Date, List<ScheduledEntry> Entries)>();
+
         foreach (var dateGroup in groupedByDate)
         {
-            var date = dateGroup.Key;
             var dayEntries = dateGroup.ToList();
-            decimal totalHours = dayEntries.Sum(e => e.Hours);
+            var scheduledEntries = csvService.ScheduleDayEntries(dayEntries, importSettings);
+            allScheduled.Add((dateGroup.Key, scheduledEntries.OrderBy(e => e.StartTime).ToList()));
+        }
+
+        // Pad to 42 hours per week with 30-min non-billable blocks
+        csvService.PadWeeklyHours(allScheduled, importSettings);
+
+        // Display preview of all scheduled entries (including padding)
+        foreach (var (date, dayEntries) in allScheduled)
+        {
+            decimal dayHours = dayEntries.Sum(e => (decimal)(e.EndTime - e.StartTime).TotalHours);
 
             AnsiConsole.WriteLine();
-            AnsiConsole.Write(new Rule($"[bold]{date:yyyy-MM-dd}[/]  [dim]{dayEntries.Count} entries | {totalHours}h[/]").RuleStyle("orange1").LeftJustified());
+            AnsiConsole.Write(new Rule($"[bold]{date:yyyy-MM-dd}[/]  [dim]{dayEntries.Count} entries | {dayHours:0.##}h[/]").RuleStyle("orange1").LeftJustified());
 
-            if (totalHours > 9)
+            if (dayHours > 9)
             {
                 ConsoleHelper.DisplayWarning(
-                    $"{totalHours} hours exceeds 9-hour daily limit (8:00-18:00 minus 1h lunch).");
+                    $"{dayHours:0.##} hours exceeds 9-hour daily limit (8:00-18:00 minus 1h lunch).");
             }
-
-            var scheduledEntries = csvService.ScheduleDayEntries(dayEntries, importSettings);
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
                 .BorderColor(Color.Grey)
                 .AddColumn(new TableColumn("[bold]Type[/]").Centered())
                 .AddColumn(new TableColumn("[bold]Time[/]").Centered())
-                .AddColumn(new TableColumn("[bold]Notes[/]"))
-                .AddColumn(new TableColumn("[bold]Status[/]").Centered());
+                .AddColumn(new TableColumn("[bold]Notes[/]"));
 
-            var orderedEntries = scheduledEntries.OrderBy(e => e.StartTime).ToList();
-
-            // Pre-populate rows
-            foreach (var scheduled in orderedEntries)
+            foreach (var scheduled in dayEntries)
             {
-                string label = scheduled.IsLunchBreak
-                    ? "[dim]:fork_and_knife: Lunch[/]"
-                    : scheduled.IsBillable
-                        ? "[green]:dollar_banknote: Billable[/]"
-                        : "[blue]:blue_circle: Non-Billable[/]";
+                string label = scheduled.IsBillable
+                    ? "[green]:dollar_banknote: Billable[/]"
+                    : "[blue]:blue_circle: Non-Billable[/]";
 
                 table.AddRow(
                     label,
                     $"{scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm}",
-                    scheduled.Notes.EscapeMarkup(),
-                    "[dim]Pending...[/]");
+                    scheduled.Notes.EscapeMarkup());
             }
 
             AnsiConsole.Write(table);
+        }
 
-            // Submit each entry with progress feedback
+        int totalEntries = allScheduled.Sum(s => s.Entries.Count);
+        decimal grandTotalHours = allScheduled.Sum(d => d.Entries.Sum(e => (decimal)(e.EndTime - e.StartTime).TotalHours));
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[bold]Total: [orange1]{totalEntries}[/] time entries across [orange1]{allScheduled.Count}[/] days | [orange1]{grandTotalHours:0.##}h[/][/]");
+
+        if (!ConsoleHelper.Confirm("Submit all entries to Harvest?"))
+        {
+            AnsiConsole.MarkupLine("[dim]Import cancelled.[/]");
+            return;
+        }
+
+        // Submit all entries after confirmation
+        foreach (var (date, orderedEntries) in allScheduled)
+        {
             foreach (var scheduled in orderedEntries)
             {
                 await AnsiConsole.Status()
                     .Spinner(Spinner.Known.Dots2)
                     .SpinnerStyle(Style.Parse("orange1"))
-                    .StartAsync($"Submitting {scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm}...", async _ =>
+                    .StartAsync($"Submitting {date:yyyy-MM-dd} {scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm}...", async _ =>
                     {
                         await SubmitTimeEntryAsync(
                             scheduled.ProjectId, scheduled.TaskId, date,
                             scheduled.StartTime, scheduled.EndTime, scheduled.Notes, ct);
                     });
 
-                ConsoleHelper.DisplaySuccess($"{scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm} submitted.");
+                ConsoleHelper.DisplaySuccess($"{date:yyyy-MM-dd} {scheduled.StartTime:HH\\:mm}-{scheduled.EndTime:HH\\:mm} submitted.");
             }
         }
 

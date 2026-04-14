@@ -19,8 +19,6 @@ public sealed record ImportSettings
     public int BillableTaskId { get; init; }
     public int NonBillableProjectId { get; init; }
     public int NonBillableTaskId { get; init; }
-    public int LunchBreakProjectId { get; init; }
-    public int LunchBreakTaskId { get; init; }
     public int HolidayProjectId { get; init; }
     public int HolidayTaskId { get; init; }
 }
