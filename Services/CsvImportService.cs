@@ -117,8 +117,10 @@ public sealed class CsvImportService
 
             var weekDays = week.OrderBy(d => d.Date).ToList();
             int dayIndex = 0;
+            var maxEndOfDay = new TimeOnly(18, 0); // 9-hour workday: 08:00-18:00 minus 1h lunch
+            int stuckCount = 0;
 
-            while (gap > 0 && dayIndex < weekDays.Count)
+            while (gap > 0 && stuckCount < weekDays.Count)
             {
                 var (date, entries) = weekDays[dayIndex];
 
@@ -131,7 +133,26 @@ public sealed class CsvImportService
                 if (lastEnd >= new TimeOnly(12, 0) && lastEnd < new TimeOnly(13, 0))
                     lastEnd = new TimeOnly(13, 0);
 
-                decimal blockMinutes = Math.Min(30, gap * 60);
+                // Skip this day if it's already full (at or past max end of day)
+                if (lastEnd >= maxEndOfDay)
+                {
+                    dayIndex = (dayIndex + 1) % weekDays.Count;
+                    stuckCount++;
+                    continue;
+                }
+
+                stuckCount = 0;
+
+                // Cap block so it doesn't extend past end of day
+                decimal availableMinutes = (decimal)(maxEndOfDay - lastEnd).TotalMinutes;
+                decimal blockMinutes = Math.Min(30, Math.Min(gap * 60, availableMinutes));
+
+                if (blockMinutes <= 0)
+                {
+                    dayIndex = (dayIndex + 1) % weekDays.Count;
+                    continue;
+                }
+
                 var blockEnd = lastEnd.AddMinutes((double)blockMinutes);
 
                 entries.Add(new ScheduledEntry
@@ -145,11 +166,7 @@ public sealed class CsvImportService
                 });
 
                 gap -= blockMinutes / 60m;
-                dayIndex++;
-
-                // Cycle back to the first day if gap still remains
-                if (dayIndex >= weekDays.Count && gap > 0)
-                    dayIndex = 0;
+                dayIndex = (dayIndex + 1) % weekDays.Count;
             }
         }
     }
